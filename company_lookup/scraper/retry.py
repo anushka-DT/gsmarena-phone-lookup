@@ -1,3 +1,4 @@
+import random
 import time
 from collections.abc import Callable
 from functools import wraps
@@ -9,17 +10,42 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 MAX_ATTEMPTS = 3
-INITIAL_DELAY = 1
+INITIAL_DELAY = 1.0
+JITTER_FACTOR = 0.5
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+RETRYABLE_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
+
+def _should_retry(error: Exception) -> bool:
+    """Check whether an exception represents a temporary failure."""
+    if isinstance(error, RETRYABLE_EXCEPTIONS):
+        return True
+
+    if isinstance(error, requests.exceptions.HTTPError):
+        response = error.response
+        return response is not None and response.status_code in RETRYABLE_STATUS_CODES
+
+    return False
+
+
+def _calculate_delay(delay: float) -> float:
+    """Calculate exponential backoff delay with random jitter."""
+    return random.uniform(
+        delay * (1 - JITTER_FACTOR),
+        delay * (1 + JITTER_FACTOR),
+    )
 
 
 def retry(
     max_attempts: int = MAX_ATTEMPTS,
     initial_delay: float = INITIAL_DELAY,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Retry failed HTTP operations using exponential backoff."""
-
+    """Retry a function after temporary HTTP or network failures."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
 
@@ -30,32 +56,24 @@ def retry(
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             delay = initial_delay
+            attempt = 0
 
-            for attempt in range(max_attempts):
+            while True:
+                attempt += 1
+
                 try:
                     return func(*args, **kwargs)
 
-                except requests.exceptions.HTTPError as error:
-                    response = error.response
-
-                    if (
-                        response is None
-                        or response.status_code not in RETRYABLE_STATUS_CODES
-                        or attempt == max_attempts - 1
-                    ):
-                        raise
-
                 except (
+                    requests.exceptions.HTTPError,
                     requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
-                ):
-                    if attempt == max_attempts - 1:
+                ) as error:
+                    if attempt >= max_attempts or not _should_retry(error):
                         raise
 
-                time.sleep(delay)
-                delay *= 2
-
-            raise RuntimeError("Retry operation ended unexpectedly.")
+                    time.sleep(_calculate_delay(delay))
+                    delay *= 2
 
         return wrapper
 

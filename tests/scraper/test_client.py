@@ -14,6 +14,12 @@ def make_response(html: str) -> Mock:
     return response
 
 
+@pytest.fixture(autouse=True)
+def disable_request_delay(monkeypatch):
+    """Disable real request delays during ordinary tests."""
+    monkeypatch.setattr(GSMArenaScraper, "REQUEST_DELAY", 0)
+
+
 @patch("company_lookup.scraper.client.requests.get")
 def test_get_phone_links(mock_get):
     html = """
@@ -443,4 +449,39 @@ def test_get_phone_links_retries_after_server_error(mock_get, mock_sleep):
     ]
 
     assert mock_get.call_count == 2
-    mock_sleep.assert_called_once_with(1)
+    assert mock_sleep.call_count == 1
+
+    actual_delay = mock_sleep.call_args.args[0]
+    assert 0.5 <= actual_delay <= 1.5
+
+
+@patch("company_lookup.scraper.client.time.monotonic")
+@patch("company_lookup.scraper.client.time.sleep")
+@patch("company_lookup.scraper.client.requests.get")
+def test_requests_respect_minimum_interval(
+    mock_get,
+    mock_sleep,
+    mock_monotonic,
+    monkeypatch,
+):
+    monkeypatch.setattr(GSMArenaScraper, "REQUEST_DELAY", 1.0)
+
+    mock_get.side_effect = [
+        make_response("<html>First page</html>"),
+        make_response("<html>Second page</html>"),
+    ]
+
+    mock_monotonic.side_effect = [
+        100.0,
+        100.2,
+        101.0,
+    ]
+
+    scraper = GSMArenaScraper()
+
+    scraper._get_page_html("https://example.com/page1")
+    scraper._get_page_html("https://example.com/page2")
+
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once()
+    assert mock_sleep.call_args.args[0] == pytest.approx(0.8)
