@@ -28,3 +28,7 @@ htmlcov/
 
 # Operating system
 .DS_Store
+
+# Local SQLite database
+data/
+*.db
