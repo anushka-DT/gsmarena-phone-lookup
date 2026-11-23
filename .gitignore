@@ -1,0 +1,29 @@
+
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ruff cache
+.ruff_cache/
+
+# IDE settings
+.idea/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Postman workspace settings
+.postman/
+postman/
+
+# Operating system
+.DS_Store
