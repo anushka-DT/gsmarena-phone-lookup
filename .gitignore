@@ -9,6 +9,7 @@ __pycache__/
 # Testing and coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # Ruff cache
@@ -20,10 +21,14 @@ htmlcov/
 # Environment variables and secrets
 .env
 .env.*
+!.env.example
 
-# Postman workspace settings
+# Postman local settings
 .postman/
-postman/
 
 # Operating system
 .DS_Store
+
+# Local SQLite database
+data/
+*.db
