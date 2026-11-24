@@ -19,6 +19,8 @@ def run_migrations(database_path: str | Path) -> None:
     """Apply all pending database migrations in order."""
     with closing(get_connection(database_path)) as connection:
         with connection:
+            connection.execute("BEGIN IMMEDIATE")
+
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (

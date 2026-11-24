@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from company_lookup.database.repository import PhoneRepository
@@ -164,6 +166,33 @@ def test_save_phones_raises_error_for_unknown_manufacturer(database_path):
     assert repository.get_manufacturers() == {}
 
 
+def test_save_phones_rolls_back_all_changes_on_failure(database_path):
+    """Verify a failure rolls back all phone changes in the transaction."""
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers({"Samsung": "https://example.com/samsung"})
+
+    phones = {
+        "Samsung": [
+            {
+                "name": "Galaxy S24",
+                "detail_url": "https://example.com/s24",
+            }
+        ],
+        "Unknown Brand": [
+            {
+                "name": "Example Phone",
+                "detail_url": "https://example.com/unknown",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="does not exist"):
+        repository.save_phones(phones)
+
+    assert repository.get_phones("Samsung") == []
+
+
 def test_get_phones_returns_empty_list(database_path):
     """Verify a manufacturer without phones returns an empty list."""
     repository = PhoneRepository(database_path)
@@ -285,6 +314,47 @@ def test_get_phones_cache_tracks_empty_listing(database_path):
 
     assert phones == []
     assert fetched_at is not None
+
+
+def test_save_phones_refreshes_cache_timestamp(database_path):
+    """Verify saving phones refreshes the manufacturer's cache timestamp."""
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers({"Samsung": "https://example.com/samsung"})
+
+    phones = {
+        "Samsung": [
+            {
+                "name": "Galaxy S24",
+                "detail_url": "https://example.com/s24",
+            }
+        ]
+    }
+
+    repository.save_phones(phones)
+
+    _, original_timestamp = repository.get_phones_cache("Samsung")
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            UPDATE manufacturers
+            SET phones_fetched_at = '2000-01-01 00:00:00'
+            WHERE name = 'Samsung'
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    repository.save_phones(phones)
+
+    _, refreshed_timestamp = repository.get_phones_cache("Samsung")
+
+    assert original_timestamp is not None
+    assert refreshed_timestamp is not None
+    assert refreshed_timestamp != "2000-01-01 00:00:00"
 
 
 def test_save_phones_removes_obsolete_records_and_preserves_existing_specs(
