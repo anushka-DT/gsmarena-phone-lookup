@@ -2,7 +2,7 @@
 
 A Python-based REST API that retrieves mobile phone manufacturers, phone listings, and technical specifications from [GSMArena](https://www.gsmarena.com/).
 
-The service uses **Requests** and **BeautifulSoup** for web scraping, **FastAPI** for API endpoints, and **SQLite** for persistent caching.
+The service uses **Requests** and **BeautifulSoup** for web scraping, **FastAPI** for API endpoints, **SQLite** for persistent caching, and **AWS Lambda** for serverless request handling.
 
 ## Features
 
@@ -18,6 +18,7 @@ The service uses **Requests** and **BeautifulSoup** for web scraping, **FastAPI*
 - Use versioned SQLite database migrations.
 - Provide structured JSON logging and request IDs.
 - Validate API query parameters and return meaningful HTTP status codes.
+- Support API Gateway REST API (v1) and HTTP API (v2) event formats through an AWS Lambda handler.
 - Include automated tests using pytest and mocked HTTP requests.
 
 ## Technology Stack
@@ -26,9 +27,11 @@ The service uses **Requests** and **BeautifulSoup** for web scraping, **FastAPI*
 |---|---|
 | Python 3.12 | Application development |
 | FastAPI | REST API |
+| AWS Lambda | Serverless request handling |
+| API Gateway | HTTP event integration with Lambda |
 | Requests | HTTP requests |
 | BeautifulSoup4 | HTML parsing |
-| SQLite | Persistent caching |
+| SQLite | Persistent caching in the local application |
 | pytest | Automated testing |
 | pytest-cov | Test coverage |
 | Ruff | Linting and formatting |
@@ -80,12 +83,14 @@ gsmarena-phone-lookup/
 │   ├── conftest.py
 │   ├── test_config.py
 │   ├── test_logging_config.py
-│   └── test_models.py
+│   ├── test_models.py
+│   └── test_lambda_function.py
 │
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
 │
+├── lambda_function.py
 ├── .env.example
 ├── .gitignore
 ├── .pre-commit-config.yaml
@@ -181,6 +186,60 @@ The SQLite database is created at:
 ```text
 data/phone_lookup.db
 ```
+
+## AWS Lambda Integration
+
+The project also includes a Lambda handler in `lambda_function.py`.
+
+The handler reuses the existing `PhoneLookupService` instead of duplicating the scraping, caching, or database business logic.
+
+### Supported API Gateway Events
+
+The handler supports:
+
+- API Gateway REST API (v1) event format.
+- API Gateway HTTP API (v2) event format.
+
+### Supported Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | Check API health |
+| GET | `/api/v1/manufacturers` | Retrieve available manufacturers |
+| GET | `/api/v1/phones?brand=Samsung` | Retrieve phones for a manufacturer |
+| GET | `/api/v1/phones/specifications?brand=Samsung&model=Samsung%20Galaxy%20S24` | Retrieve phone specifications |
+
+The Lambda handler returns API Gateway proxy responses containing a status code, headers, and a JSON response body.
+
+### Lambda Database Storage
+
+The Lambda handler uses the following database path:
+
+```text
+/tmp/phone_lookup.db
+```
+
+AWS Lambda provides `/tmp` as temporary writable storage. This location is suitable for the handler's SQLite database, but it is not permanent storage. Its contents may not survive execution environment replacement or lifecycle changes.
+
+The handler initializes the database migrations and service lazily, reusing the service instance within a warm execution environment.
+
+### Lambda Error Handling
+
+The handler returns appropriate HTTP status codes:
+
+| Status Code | Description |
+|---|---|
+| `200 OK` | Request completed successfully |
+| `404 Not Found` | Endpoint, manufacturer, or phone model was not found |
+| `422 Unprocessable Entity` | Required query parameters are missing |
+| `503 Service Unavailable` | GSMArena request failed |
+| `500 Internal Server Error` | Unexpected application error |
+
+### Lambda Scope
+
+The Lambda implementation is provided as application code and is tested locally through automated tests.
+
+Actual AWS Lambda deployment and API Gateway configuration are not included in the current project scope.
 
 ## API Endpoints
 
@@ -293,6 +352,8 @@ The example illustrates the response structure. Actual values are retrieved from
 | `422 Unprocessable Entity` | Missing or invalid query parameters |
 | `503 Service Unavailable` | GSMArena is temporarily unavailable and no usable cached response is available |
 
+The Lambda handler also returns `500 Internal Server Error` for unexpected errors.
+
 ## Application Architecture
 
 The application follows a layered architecture.
@@ -349,7 +410,19 @@ Database schema changes are managed through versioned migrations.
 | `v002` | Add cache timestamp columns |
 | `v003` | Add an index on `phones.manufacturer_id` |
 
-Pending migrations are applied automatically during application startup.
+Pending migrations are applied automatically during application startup. The Lambda handler also initializes migrations when its service is first created.
+
+### 6. Lambda Handler
+
+`lambda_function.py` provides an entry point for API Gateway requests.
+
+Responsibilities include:
+
+- Extracting HTTP methods, paths, and query parameters from API Gateway events.
+- Supporting REST API v1 and HTTP API v2 event structures.
+- Reusing the existing phone lookup service.
+- Returning API Gateway-compatible JSON responses.
+- Handling validation errors and application exceptions.
 
 ## Caching Strategy
 
@@ -366,6 +439,8 @@ The caching workflow is:
 5. If scraping fails, return available stale cached data where possible.
 
 This reduces unnecessary HTTP requests and improves availability during temporary source website failures.
+
+For the local FastAPI application, the SQLite database is stored in the project's `data` directory. For Lambda, the handler uses `/tmp`, which is temporary storage and should not be considered durable.
 
 ## Retry and Request Handling
 
@@ -388,6 +463,8 @@ The application uses structured JSON logging.
 Each API request receives a request ID.
 
 The request ID is returned in the `X-Request-ID` response header and included in application logs to help trace requests.
+
+The Lambda handler also logs unexpected errors server-side while returning generic error responses to callers.
 
 ## Running Tests
 
@@ -415,7 +492,13 @@ Run an individual test module:
 pytest tests/scraper/test_parser.py -v
 ```
 
-The tests cover API routes, scraper behavior, HTML parsing, retry handling, database operations, migrations, caching, and service error handling.
+Run the Lambda handler tests:
+
+```bash
+pytest tests/test_lambda_function.py -v
+```
+
+The tests cover API routes, scraper behavior, HTML parsing, retry handling, database operations, migrations, caching, service error handling, and Lambda request handling.
 
 External HTTP requests are mocked in tests, and SQLite test databases are isolated from the application database.
 
