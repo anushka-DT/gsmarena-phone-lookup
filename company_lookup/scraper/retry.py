@@ -1,3 +1,5 @@
+"""Provide reusable retry handling for scraper requests."""
+
 import random
 import time
 from collections.abc import Callable

@@ -101,6 +101,97 @@ def test_get_manufacturers_scrapes_and_saves_when_cache_is_empty(
     assert repository.get_manufacturers() == scraper.manufacturers
 
 
+def test_get_manufacturers_scrapes_when_database_read_fails(
+    database_path,
+    monkeypatch,
+):
+    scraper = FakeScraper()
+    repository = PhoneRepository(database_path)
+
+    def fail_get_manufacturers_cache():
+        raise sqlite3.OperationalError("Database is locked")
+
+    monkeypatch.setattr(
+        repository,
+        "get_manufacturers_cache",
+        fail_get_manufacturers_cache,
+    )
+
+    service = PhoneLookupService(
+        scraper=scraper,
+        repository=repository,
+    )
+
+    result = service.get_manufacturers()
+
+    assert result == scraper.manufacturers
+    assert scraper.manufacturer_calls == 1
+
+
+def test_get_manufacturers_works_when_database_is_unavailable(tmp_path):
+    scraper = FakeScraper()
+
+    # A directory cannot be opened as a SQLite database file.
+    service = create_service(scraper, tmp_path)
+
+    result = service.get_manufacturers()
+
+    assert result == scraper.manufacturers
+    assert scraper.manufacturer_calls == 1
+
+
+def test_get_manufacturers_refreshes_expired_cache(database_path):
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers({"Samsung": "https://example.com/old-samsung"})
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE manufacturers
+            SET fetched_at = datetime('now', '-8 days')
+            """
+        )
+
+    scraper = FakeScraper()
+    service = create_service(scraper, database_path)
+
+    result = service.get_manufacturers()
+
+    assert result == scraper.manufacturers
+    assert scraper.manufacturer_calls == 1
+
+
+def test_get_manufacturers_returns_stale_cache_when_refresh_fails(
+    database_path,
+):
+    repository = PhoneRepository(database_path)
+
+    stale_manufacturers = {"Samsung": "https://example.com/old-samsung"}
+
+    repository.save_manufacturers(stale_manufacturers)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE manufacturers
+            SET fetched_at = datetime('now', '-8 days')
+            """
+        )
+
+    scraper = FakeScraper()
+    scraper.manufacturer_error = requests.exceptions.ConnectionError(
+        "GSMArena unavailable"
+    )
+
+    service = create_service(scraper, database_path)
+
+    result = service.get_manufacturers()
+
+    assert result == stale_manufacturers
+    assert scraper.manufacturer_calls == 1
+
+
 def test_get_phones_returns_cached_data(database_path):
     repository = PhoneRepository(database_path)
 
@@ -177,6 +268,76 @@ def test_get_phones_scrapes_and_saves_when_cache_is_empty(database_path):
     ]
 
 
+def test_get_phones_scrapes_when_database_read_fails(
+    database_path,
+    monkeypatch,
+):
+    scraper = FakeScraper()
+    repository = PhoneRepository(database_path)
+
+    def fail_get_phones_cache(manufacturer_name):
+        raise sqlite3.OperationalError("Database is locked")
+
+    monkeypatch.setattr(
+        repository,
+        "get_phones_cache",
+        fail_get_phones_cache,
+    )
+
+    service = PhoneLookupService(
+        scraper=scraper,
+        repository=repository,
+    )
+
+    result = service.get_phones("Samsung")
+
+    assert result == scraper.phones
+    assert scraper.manufacturer_calls == 1
+    assert scraper.phone_calls == 1
+
+
+def test_get_phones_raises_error_when_scraping_fails_without_cache(
+    database_path,
+):
+    scraper = FakeScraper()
+    scraper.phone_error = requests.exceptions.ConnectionError("GSMArena unavailable")
+
+    service = create_service(scraper, database_path)
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        service.get_phones("Samsung")
+
+    assert scraper.manufacturer_calls == 1
+    assert scraper.phone_calls == 1
+
+    repository = PhoneRepository(database_path)
+    assert repository.get_phones("Samsung") == []
+
+
+def test_get_phones_returns_scraped_data_when_database_save_fails(
+    database_path,
+    monkeypatch,
+):
+    scraper = FakeScraper()
+    repository = PhoneRepository(database_path)
+
+    def fail_save_phones(phones):
+        raise sqlite3.OperationalError("Database is locked")
+
+    monkeypatch.setattr(repository, "save_phones", fail_save_phones)
+
+    service = PhoneLookupService(
+        scraper=scraper,
+        repository=repository,
+    )
+
+    result = service.get_phones("Samsung")
+
+    assert result == scraper.phones
+    assert scraper.phone_calls == 1
+    assert repository.get_phones("Samsung") == []
+
+
 @pytest.mark.parametrize(
     "manufacturer_name",
     ["samsung", "SAMSUNG", "SaMsUnG"],
@@ -203,84 +364,6 @@ def test_get_phones_scrapes_with_case_insensitive_name(
     ]
 
 
-def test_get_phone_specifications_returns_cached_data(database_path):
-    repository = PhoneRepository(database_path)
-
-    repository.save_manufacturers({"Samsung": "https://example.com/samsung.php"})
-
-    repository.save_phones(
-        {
-            "Samsung": [
-                {
-                    "name": "Galaxy S24",
-                    "detail_url": "https://example.com/galaxy-s24",
-                }
-            ]
-        }
-    )
-
-    repository.save_specifications(
-        "https://example.com/galaxy-s24",
-        {
-            "Network": {
-                "Technology": ["GSM / HSPA / LTE / 5G"],
-            }
-        },
-    )
-
-    scraper = FakeScraper()
-    service = create_service(scraper, database_path)
-
-    result = service.get_phone_specifications("https://example.com/galaxy-s24")
-
-    assert result == scraper.specifications
-    assert scraper.specification_calls == 0
-
-
-def test_get_phone_specifications_scrapes_and_saves_when_cache_is_empty(
-    database_path,
-):
-    repository = PhoneRepository(database_path)
-
-    repository.save_manufacturers({"Samsung": "https://example.com/samsung.php"})
-
-    repository.save_phones(
-        {
-            "Samsung": [
-                {
-                    "name": "Galaxy S24",
-                    "detail_url": "https://example.com/galaxy-s24",
-                }
-            ]
-        }
-    )
-
-    scraper = FakeScraper()
-    service = create_service(scraper, database_path)
-
-    result = service.get_phone_specifications("https://example.com/galaxy-s24")
-
-    assert result == scraper.specifications
-    assert scraper.specification_calls == 1
-
-    assert (
-        repository.get_specifications("https://example.com/galaxy-s24")
-        == scraper.specifications
-    )
-
-
-def test_get_manufacturers_works_when_database_is_unavailable(tmp_path):
-    scraper = FakeScraper()
-
-    # A directory cannot be opened as a SQLite database file.
-    service = create_service(scraper, tmp_path)
-
-    result = service.get_manufacturers()
-
-    assert result == scraper.manufacturers
-    assert scraper.manufacturer_calls == 1
-
-
 def test_get_phones_raises_error_for_unknown_manufacturer(database_path):
     scraper = FakeScraper()
     scraper.manufacturers = {}
@@ -291,58 +374,6 @@ def test_get_phones_raises_error_for_unknown_manufacturer(database_path):
         service.get_phones("UnknownBrand")
 
     assert scraper.phone_calls == 0
-    assert scraper.manufacturer_calls == 1
-
-
-def test_get_manufacturers_refreshes_expired_cache(database_path):
-    repository = PhoneRepository(database_path)
-
-    repository.save_manufacturers({"Samsung": "https://example.com/old-samsung"})
-
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            UPDATE manufacturers
-            SET fetched_at = datetime('now', '-8 days')
-            """
-        )
-
-    scraper = FakeScraper()
-    service = create_service(scraper, database_path)
-
-    result = service.get_manufacturers()
-
-    assert result == scraper.manufacturers
-    assert scraper.manufacturer_calls == 1
-
-
-def test_get_manufacturers_returns_stale_cache_when_refresh_fails(
-    database_path,
-):
-    repository = PhoneRepository(database_path)
-
-    stale_manufacturers = {"Samsung": "https://example.com/old-samsung"}
-
-    repository.save_manufacturers(stale_manufacturers)
-
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            UPDATE manufacturers
-            SET fetched_at = datetime('now', '-8 days')
-            """
-        )
-
-    scraper = FakeScraper()
-    scraper.manufacturer_error = requests.exceptions.ConnectionError(
-        "GSMArena unavailable"
-    )
-
-    service = create_service(scraper, database_path)
-
-    result = service.get_manufacturers()
-
-    assert result == stale_manufacturers
     assert scraper.manufacturer_calls == 1
 
 
@@ -431,6 +462,140 @@ def test_get_phones_uses_fresh_empty_cache(database_path):
 
     assert result == []
     assert scraper.phone_calls == 0
+
+
+def test_get_phone_specifications_returns_cached_data(database_path):
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers({"Samsung": "https://example.com/samsung.php"})
+
+    repository.save_phones(
+        {
+            "Samsung": [
+                {
+                    "name": "Galaxy S24",
+                    "detail_url": "https://example.com/galaxy-s24",
+                }
+            ]
+        }
+    )
+
+    repository.save_specifications(
+        "https://example.com/galaxy-s24",
+        {
+            "Network": {
+                "Technology": ["GSM / HSPA / LTE / 5G"],
+            }
+        },
+    )
+
+    scraper = FakeScraper()
+    service = create_service(scraper, database_path)
+
+    result = service.get_phone_specifications("https://example.com/galaxy-s24")
+
+    assert result == scraper.specifications
+    assert scraper.specification_calls == 0
+
+
+def test_get_phone_specifications_scrapes_and_saves_when_cache_is_empty(
+    database_path,
+):
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers({"Samsung": "https://example.com/samsung.php"})
+
+    repository.save_phones(
+        {
+            "Samsung": [
+                {
+                    "name": "Galaxy S24",
+                    "detail_url": "https://example.com/galaxy-s24",
+                }
+            ]
+        }
+    )
+
+    scraper = FakeScraper()
+    service = create_service(scraper, database_path)
+
+    phone_url = "https://example.com/galaxy-s24"
+    result = service.get_phone_specifications(phone_url)
+
+    assert result == scraper.specifications
+    assert scraper.specification_calls == 1
+    assert repository.get_specifications(phone_url) == scraper.specifications
+
+
+def test_get_phone_specifications_scrapes_when_database_read_fails(
+    database_path,
+    monkeypatch,
+):
+    scraper = FakeScraper()
+    repository = PhoneRepository(database_path)
+
+    phone_url = "https://example.com/galaxy-s24"
+
+    repository.save_manufacturers({"Samsung": "https://example.com/samsung.php"})
+
+    repository.save_phones(
+        {
+            "Samsung": [
+                {
+                    "name": "Galaxy S24",
+                    "detail_url": phone_url,
+                }
+            ]
+        }
+    )
+
+    def fail_get_specifications_cache(phone_url):
+        raise sqlite3.OperationalError("Database is locked")
+
+    monkeypatch.setattr(
+        repository,
+        "get_specifications_cache",
+        fail_get_specifications_cache,
+    )
+
+    service = PhoneLookupService(
+        scraper=scraper,
+        repository=repository,
+    )
+
+    result = service.get_phone_specifications(phone_url)
+
+    assert result == scraper.specifications
+    assert scraper.specification_calls == 1
+
+
+def test_get_phone_specifications_returns_scraped_data_when_database_save_fails(
+    database_path,
+    monkeypatch,
+):
+    scraper = FakeScraper()
+    repository = PhoneRepository(database_path)
+
+    phone_url = "https://example.com/galaxy-s24"
+
+    def fail_save_specifications(url, specifications):
+        raise sqlite3.OperationalError("Database is locked")
+
+    monkeypatch.setattr(
+        repository,
+        "save_specifications",
+        fail_save_specifications,
+    )
+
+    service = PhoneLookupService(
+        scraper=scraper,
+        repository=repository,
+    )
+
+    result = service.get_phone_specifications(phone_url)
+
+    assert result == scraper.specifications
+    assert scraper.specification_calls == 1
 
 
 def test_get_phone_specifications_refreshes_expired_cache(database_path):

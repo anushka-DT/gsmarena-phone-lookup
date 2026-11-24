@@ -1,3 +1,5 @@
+"""Create the initial database schema."""
+
 import sqlite3
 
 

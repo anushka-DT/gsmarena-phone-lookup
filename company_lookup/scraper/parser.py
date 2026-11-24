@@ -1,6 +1,8 @@
+"""Parse manufacturer, phone, and specification HTML from GSMArena."""
+
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
 def parse_manufacturers(html: str, base_url: str) -> dict[str, str]:
@@ -73,6 +75,41 @@ def parse_phone_links(html: str, base_url: str) -> list[dict[str, str]]:
     return phones
 
 
+def _parse_specification_row(
+    row: Tag,
+    previous_label: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Extract a specification row's value, key, and updated previous label."""
+    label_cell = row.find("td", class_="ttl")
+    value_cell = row.find("td", class_="nfo")
+
+    if value_cell is None:
+        return None, None, previous_label
+
+    value = value_cell.get_text(" ", strip=True)
+
+    if not value:
+        return None, None, previous_label
+
+    label = label_cell.get_text(" ", strip=True) if label_cell else ""
+    data_spec = value_cell.get("data-spec")
+    is_optional = row.has_attr("data-spec-optional")
+
+    if label:
+        key = label
+        previous_label = key
+    elif data_spec:
+        key = str(data_spec)
+        previous_label = None
+    elif is_optional and previous_label:
+        key = previous_label
+    else:
+        key = "Unlabeled"
+        previous_label = None
+
+    return value, key, previous_label
+
+
 def parse_specifications(html: str) -> dict[str, dict[str, list[str]]]:
     """Extract phone specifications while preserving continuation values."""
     soup = BeautifulSoup(html, "html.parser")
@@ -83,10 +120,8 @@ def parse_specifications(html: str) -> dict[str, dict[str, list[str]]]:
     previous_label: str | None = None
 
     for row in soup.select("#specs-list tr"):
-        cells = row.find_all(["th", "td"], recursive=False)
-
         section_cell = next(
-            (cell for cell in cells if cell.name == "th"),
+            (cell for cell in row.find_all("th", recursive=False)),
             None,
         )
 
@@ -98,52 +133,15 @@ def parse_specifications(html: str) -> dict[str, dict[str, list[str]]]:
         if current_section is None:
             continue
 
-        label_cell = next(
-            (
-                cell
-                for cell in cells
-                if cell.name == "td" and "ttl" in cell.get("class", [])
-            ),
-            None,
+        value, key, previous_label = _parse_specification_row(
+            row,
+            previous_label,
         )
 
-        value_cell = next(
-            (
-                cell
-                for cell in cells
-                if cell.name == "td" and "nfo" in cell.get("class", [])
-            ),
-            None,
-        )
-
-        if value_cell is None:
+        if value is None or key is None:
             continue
 
-        value = value_cell.get_text(" ", strip=True)
-
-        if not value:
-            continue
-
-        label = label_cell.get_text(" ", strip=True) if label_cell else ""
-
-        data_spec = value_cell.get("data-spec")
-        is_optional = row.has_attr("data-spec-optional")
-
-        section_specs = specifications[current_section]
-
-        if label:
-            key = label
-            previous_label = key
-        elif data_spec:
-            key = str(data_spec)
-            previous_label = None
-        elif is_optional and previous_label:
-            key = previous_label
-        else:
-            key = "Unlabeled"
-            previous_label = None
-
-        section_specs.setdefault(key, []).append(value)
+        specifications[current_section].setdefault(key, []).append(value)
 
     return specifications
 

@@ -1,3 +1,5 @@
+"""Provide database operations for manufacturers, phones, and specifications."""
+
 import json
 from contextlib import closing
 from pathlib import Path
@@ -16,19 +18,33 @@ class PhoneRepository:
         self.database_path = database_path
 
     def save_manufacturers(self, manufacturers: dict[str, str]) -> None:
-        """Insert or update manufacturers and their cache timestamps."""
-        with closing(get_connection(self.database_path)) as connection, connection:
-            connection.executemany(
-                """
-                INSERT INTO manufacturers (name, listing_url, fetched_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(name)
-                DO UPDATE SET
-                    listing_url = excluded.listing_url,
-                    fetched_at = CURRENT_TIMESTAMP
-                """,
-                manufacturers.items(),
-            )
+        """Synchronize manufacturers and their cache timestamps."""
+        if not manufacturers:
+            return
+
+        with closing(get_connection(self.database_path)) as connection:
+            with connection:
+                connection.executemany(
+                    """
+                    INSERT INTO manufacturers (name, listing_url, fetched_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(name)
+                    DO UPDATE SET
+                        listing_url = excluded.listing_url,
+                        fetched_at = CURRENT_TIMESTAMP
+                    """,
+                    manufacturers.items(),
+                )
+
+                placeholders = ", ".join("?" for _ in manufacturers)
+
+                connection.execute(
+                    f"""
+                    DELETE FROM manufacturers
+                    WHERE name NOT IN ({placeholders})
+                    """,
+                    tuple(manufacturers),
+                )
 
     def get_manufacturers(self) -> dict[str, str]:
         """Retrieve all manufacturers and their listing URLs."""
@@ -56,75 +72,78 @@ class PhoneRepository:
 
     def save_phones(self, phones: dict[str, list[PhoneRecord]]) -> None:
         """Replace a manufacturer's phone listing and refresh its timestamp."""
-        with closing(get_connection(self.database_path)) as connection, connection:
-            for manufacturer_name, manufacturer_phones in phones.items():
-                manufacturer = connection.execute(
-                    """
-                    SELECT id
-                    FROM manufacturers
-                    WHERE name = ?
-                    """,
-                    (manufacturer_name,),
-                ).fetchone()
-
-                if manufacturer is None:
-                    raise ValueError(
-                        f"Manufacturer '{manufacturer_name}' does not exist."
-                    )
-
-                manufacturer_id = manufacturer["id"]
-
-                phone_records = [
-                    (
-                        manufacturer_id,
-                        phone["name"],
-                        phone["detail_url"],
-                    )
-                    for phone in manufacturer_phones
-                ]
-
-                connection.executemany(
-                    """
-                    INSERT INTO phones (
-                        manufacturer_id,
-                        name,
-                        detail_url
-                    )
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(detail_url)
-                    DO UPDATE SET
-                        name = excluded.name,
-                        manufacturer_id = excluded.manufacturer_id
-                    """,
-                    phone_records,
-                )
-
-                current_urls = [phone["detail_url"] for phone in manufacturer_phones]
-
-                if current_urls:
-                    placeholders = ", ".join("?" for _ in current_urls)
-                    connection.execute(
-                        f"""
-                        DELETE FROM phones
-                        WHERE manufacturer_id = ?
-                        AND detail_url NOT IN ({placeholders})
+        with closing(get_connection(self.database_path)) as connection:
+            with connection:
+                for manufacturer_name, manufacturer_phones in phones.items():
+                    manufacturer = connection.execute(
+                        """
+                        SELECT id
+                        FROM manufacturers
+                        WHERE name = ?
                         """,
-                        [manufacturer_id, *current_urls],
+                        (manufacturer_name,),
+                    ).fetchone()
+
+                    if manufacturer is None:
+                        raise ValueError(
+                            f"Manufacturer '{manufacturer_name}' does not exist."
+                        )
+
+                    manufacturer_id = manufacturer["id"]
+
+                    phone_records = [
+                        (
+                            manufacturer_id,
+                            phone["name"],
+                            phone["detail_url"],
+                        )
+                        for phone in manufacturer_phones
+                    ]
+
+                    connection.executemany(
+                        """
+                        INSERT INTO phones (
+                            manufacturer_id,
+                            name,
+                            detail_url
+                        )
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(detail_url)
+                        DO UPDATE SET
+                            name = excluded.name,
+                            manufacturer_id = excluded.manufacturer_id
+                        """,
+                        phone_records,
                     )
-                else:
+
+                    current_urls = [
+                        phone["detail_url"] for phone in manufacturer_phones
+                    ]
+
+                    if current_urls:
+                        placeholders = ", ".join("?" for _ in current_urls)
+                        connection.execute(
+                            f"""
+                            DELETE FROM phones
+                            WHERE manufacturer_id = ?
+                            AND detail_url NOT IN ({placeholders})
+                            """,
+                            [manufacturer_id, *current_urls],
+                        )
+                    else:
+                        connection.execute(
+                            "DELETE FROM phones WHERE manufacturer_id = ?",
+                            (manufacturer_id,),
+                        )
+
                     connection.execute(
-                        "DELETE FROM phones WHERE manufacturer_id = ?",
+                        """
+                        UPDATE manufacturers
+                        SET phones_fetched_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
                         (manufacturer_id,),
                     )
-
-                connection.execute(
-                    """
-                    UPDATE manufacturers
-                    SET phones_fetched_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (manufacturer_id,),
-                )
 
     def get_phones(self, manufacturer_name: str) -> list[PhoneRecord]:
         """Retrieve all phones belonging to a manufacturer."""
@@ -170,36 +189,37 @@ class PhoneRepository:
         specifications: PhoneSpecifications,
     ) -> None:
         """Insert or update specifications for a phone."""
-        with closing(get_connection(self.database_path)) as connection, connection:
-            phone = connection.execute(
-                """
-                SELECT id
-                FROM phones
-                WHERE detail_url = ?
-                """,
-                (phone_url,),
-            ).fetchone()
+        with closing(get_connection(self.database_path)) as connection:
+            with connection:
+                phone = connection.execute(
+                    """
+                    SELECT id
+                    FROM phones
+                    WHERE detail_url = ?
+                    """,
+                    (phone_url,),
+                ).fetchone()
 
-            if phone is None:
-                raise ValueError(f"Phone with URL '{phone_url}' does not exist.")
+                if phone is None:
+                    raise ValueError(f"Phone with URL '{phone_url}' does not exist.")
 
-            connection.execute(
-                """
-                INSERT INTO phone_specifications (
-                    phone_id,
-                    specifications_json
+                connection.execute(
+                    """
+                    INSERT INTO phone_specifications (
+                        phone_id,
+                        specifications_json
+                    )
+                    VALUES (?, ?)
+                    ON CONFLICT(phone_id)
+                    DO UPDATE SET
+                        specifications_json = excluded.specifications_json,
+                        fetched_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        phone["id"],
+                        json.dumps(specifications),
+                    ),
                 )
-                VALUES (?, ?)
-                ON CONFLICT(phone_id)
-                DO UPDATE SET
-                    specifications_json = excluded.specifications_json,
-                    fetched_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    phone["id"],
-                    json.dumps(specifications),
-                ),
-            )
 
     def get_specifications(
         self,

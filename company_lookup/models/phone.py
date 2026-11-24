@@ -1,3 +1,5 @@
+"""Define the phone data model."""
+
 from dataclasses import dataclass
 
 

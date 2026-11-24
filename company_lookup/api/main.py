@@ -1,3 +1,5 @@
+"""Create and configure the FastAPI application."""
+
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager

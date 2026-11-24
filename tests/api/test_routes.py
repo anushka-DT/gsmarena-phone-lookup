@@ -228,7 +228,9 @@ def test_get_phone_specifications_returns_404_for_unknown_brand(client):
     assert response.json() == {"detail": "Manufacturer 'UnknownBrand' was not found."}
 
 
-def test_get_phone_specifications_returns_503_when_phone_lookup_fails(client):
+def test_get_phone_specifications_returns_503_when_phone_lookup_fails(
+    client,
+):
     class FailingPhoneLookupService:
         """Simulate a failure while retrieving the manufacturer's phones."""
 
@@ -299,6 +301,26 @@ def test_get_phones_returns_422_when_brand_is_missing(client, params):
 
 
 @pytest.mark.parametrize(
+    "brand",
+    [
+        "",
+        " ",
+        "   ",
+    ],
+)
+def test_get_phones_returns_422_for_empty_or_whitespace_brand(client, brand):
+    override_service(FakePhoneLookupService())
+
+    response = client.get(
+        "/api/v1/phones",
+        params={"brand": brand},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "brand"]
+
+
+@pytest.mark.parametrize(
     "params, missing_parameter",
     [
         ({"brand": "Samsung"}, "model"),
@@ -321,3 +343,32 @@ def test_get_phone_specifications_returns_422_when_required_parameter_is_missing
     assert response.status_code == 422
     missing_parameters = [error["loc"][-1] for error in response.json()["detail"]]
     assert missing_parameter in missing_parameters
+
+
+@pytest.mark.parametrize(
+    "parameter, value",
+    [
+        ("brand", ""),
+        ("brand", "   "),
+        ("model", ""),
+        ("model", "   "),
+    ],
+)
+def test_get_phone_specifications_returns_422_for_empty_or_whitespace_inputs(
+    client,
+    parameter,
+    value,
+):
+    override_service(FakePhoneLookupService())
+
+    response = client.get(
+        "/api/v1/phones/specifications",
+        params={
+            "brand": "Samsung",
+            "model": "Galaxy S24 Ultra",
+            parameter: value,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", parameter]

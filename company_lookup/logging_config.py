@@ -1,3 +1,5 @@
+"""Configure structured application logging."""
+
 import json
 import logging
 from contextvars import ContextVar

@@ -1,3 +1,5 @@
+"""Add cache timestamps to database tables."""
+
 import sqlite3
 
 

@@ -16,8 +16,9 @@ def make_response(html: str) -> Mock:
 
 @pytest.fixture(autouse=True)
 def disable_request_delay(monkeypatch):
-    """Disable real request delays during ordinary tests."""
+    """Disable real request delays and reset shared request state."""
     monkeypatch.setattr(GSMArenaScraper, "REQUEST_DELAY", 0)
+    monkeypatch.setattr(GSMArenaScraper, "_last_request_time", None)
 
 
 @patch("company_lookup.scraper.client.requests.get")
@@ -458,13 +459,14 @@ def test_get_phone_links_retries_after_server_error(mock_get, mock_sleep):
 @patch("company_lookup.scraper.client.time.monotonic")
 @patch("company_lookup.scraper.client.time.sleep")
 @patch("company_lookup.scraper.client.requests.get")
-def test_requests_respect_minimum_interval(
+def test_requests_respect_minimum_interval_across_instances(
     mock_get,
     mock_sleep,
     mock_monotonic,
     monkeypatch,
 ):
     monkeypatch.setattr(GSMArenaScraper, "REQUEST_DELAY", 1.0)
+    monkeypatch.setattr(GSMArenaScraper, "_last_request_time", None)
 
     mock_get.side_effect = [
         make_response("<html>First page</html>"),
@@ -477,10 +479,11 @@ def test_requests_respect_minimum_interval(
         101.0,
     ]
 
-    scraper = GSMArenaScraper()
+    first_scraper = GSMArenaScraper()
+    second_scraper = GSMArenaScraper()
 
-    scraper._get_page_html("https://example.com/page1")
-    scraper._get_page_html("https://example.com/page2")
+    first_scraper._get_page_html("https://example.com/page1")
+    second_scraper._get_page_html("https://example.com/page2")
 
     assert mock_get.call_count == 2
     mock_sleep.assert_called_once()

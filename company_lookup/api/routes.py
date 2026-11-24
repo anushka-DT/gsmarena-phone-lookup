@@ -1,5 +1,7 @@
+"""Define phone lookup API endpoints."""
+
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from company_lookup.config import get_cache_ttl_days
 from company_lookup.exceptions import ManufacturerNotFoundError
@@ -33,7 +35,7 @@ def get_manufacturers(
 
 @router.get("/phones")
 def get_phones(
-    brand: str,
+    brand: str = Query(..., min_length=1, pattern=r".*\S.*"),
     service: PhoneLookupService = Depends(get_phone_lookup_service),
 ) -> dict[str, str | list[dict[str, str]]]:
     """Retrieve all phones belonging to a manufacturer."""
@@ -62,8 +64,8 @@ def get_phones(
 
 @router.get("/phones/specifications")
 def get_phone_specifications(
-    brand: str,
-    model: str,
+    brand: str = Query(..., min_length=1, pattern=r".*\S.*"),
+    model: str = Query(..., min_length=1, pattern=r".*\S.*"),
     service: PhoneLookupService = Depends(get_phone_lookup_service),
 ) -> dict[str, str | dict[str, dict[str, list[str]]]]:
     """Retrieve specifications for a particular phone model."""

@@ -1,4 +1,7 @@
+"""Implement the GSMArena HTTP scraping client."""
+
 import time
+from threading import Lock
 from typing import ClassVar
 from urllib.parse import urljoin
 
@@ -26,14 +29,15 @@ class GSMArenaScraper:
         "User-Agent": "Mozilla/5.0",
     }
 
+    _request_lock: ClassVar = Lock()
+    _last_request_time: ClassVar[float | None] = None
+
     def __init__(
         self,
         max_attempts: int = MAX_ATTEMPTS,
         initial_delay: float = INITIAL_DELAY,
     ) -> None:
         """Initialize the scraper with configurable retry settings."""
-        self._last_request_time: float | None = None
-
         self._request_page = retry(
             max_attempts=max_attempts,
             initial_delay=initial_delay,
@@ -51,21 +55,23 @@ class GSMArenaScraper:
                 time.sleep(remaining)
                 current_time = time.monotonic()
 
-        self._last_request_time = current_time
+        type(self)._last_request_time = current_time
 
     def _fetch_page_html(self, page_url: str) -> str:
-        """Fetch HTML from a URL using the configured request timeout."""
-        response = requests.get(
-            page_url,
-            headers=self.HEADERS,
-            timeout=self.REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        return response.text
+        """Fetch HTML while respecting shared request pacing."""
+        with self._request_lock:
+            self._wait_for_request_interval()
+
+            response = requests.get(
+                page_url,
+                headers=self.HEADERS,
+                timeout=self.REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.text
 
     def _get_page_html(self, page_url: str) -> str:
         """Fetch a page with request pacing and retry handling."""
-        self._wait_for_request_interval()
         return self._request_page(page_url)
 
     def get_manufacturers(self) -> dict[str, str]:

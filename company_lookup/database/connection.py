@@ -1,3 +1,5 @@
+"""Manage SQLite database connections."""
+
 import sqlite3
 from pathlib import Path
 

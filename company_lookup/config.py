@@ -1,3 +1,5 @@
+"""Define application configuration settings."""
+
 import os
 
 

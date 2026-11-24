@@ -33,6 +33,46 @@ def test_save_manufacturers_updates_existing_entry(database_path):
     assert result["Samsung"] == "https://example.com/new-url"
 
 
+def test_save_manufacturers_removes_obsolete_entries(database_path):
+    """Verify refreshing manufacturers removes obsolete entries."""
+    repository = PhoneRepository(database_path)
+
+    repository.save_manufacturers(
+        {
+            "Samsung": "https://example.com/samsung",
+            "Apple": "https://example.com/apple",
+            "Nokia": "https://example.com/nokia",
+        }
+    )
+
+    repository.save_manufacturers(
+        {
+            "Samsung": "https://example.com/samsung-updated",
+            "Apple": "https://example.com/apple",
+        }
+    )
+
+    assert repository.get_manufacturers() == {
+        "Samsung": "https://example.com/samsung-updated",
+        "Apple": "https://example.com/apple",
+    }
+
+
+def test_save_manufacturers_empty_result_preserves_existing_entries(database_path):
+    """Verify an empty refresh does not delete existing manufacturers."""
+    repository = PhoneRepository(database_path)
+
+    manufacturers = {
+        "Samsung": "https://example.com/samsung",
+        "Apple": "https://example.com/apple",
+    }
+    repository.save_manufacturers(manufacturers)
+
+    repository.save_manufacturers({})
+
+    assert repository.get_manufacturers() == manufacturers
+
+
 def test_get_manufacturers_returns_empty_dictionary(database_path):
     """Verify an empty database returns an empty dictionary."""
     repository = PhoneRepository(database_path)
